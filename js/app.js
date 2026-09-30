@@ -430,7 +430,7 @@ function prof(id) {
   }
   </span></td></tr>`),'No transactions yet.')}</div></div>`
 }
-V.pay = () => hd('Payments', 'Money in from customers, money out to suppliers') + `<div class="two"><div class="card"><h3>Receive customer payment</h3><br><form data-f="cpay">${fld('Customer',`<select name="cust">${
+V.pay = () => hd('Payments', 'Money in from customers, money out to suppliers') + `<div class="two"><div class="card"><h3>Add customer payment</h3><br><form data-f="cpay">${fld('Customer',`<select name="cust">${
   opts(S.customers)
 }
 </select>`)}${fld('Amount (Rs)',inp('amount','number','','required min=1'))}${fld('Method',`<select name="method"><option>Cash</option><option>Bank</option></select>`)}${fld('Date',inp('date','date',td))}${fld('Notes',inp('notes'))}<button class="btn ac">Save payment</button></form></div>
@@ -438,11 +438,11 @@ V.pay = () => hd('Payments', 'Money in from customers, money out to suppliers') 
   opts(S.suppliers)
 }
 </select>`)}${fld('Amount (Rs)',inp('amount','number','','required min=1'))}${fld('Method',`<select name="method"><option>Bank</option><option>Cash</option></select>`)}${fld('Date',inp('date','date',td))}<button class="btn ac">Save payment</button></form></div></div>
-<div class="two one"><div class="card"><h3>Received</h3>${tbl(['Date','Customer','>Amount','>Actions'],[...S.cpay].reverse().sort((a,b)=>b.date.localeCompare(a.date)).map(p=>`<tr><td>${
+<div class="two one"><div class="card"><h3>Received payments (${S.cpay.length})</h3>${tbl(['Date','Customer','>Amount','>Actions'],[...S.cpay].sort((a,b)=>(b.date||'').localeCompare(a.date||'')).map(p=>`<tr><td>${
   p.date
 }
 </td><td>${
-  C(p.cust)?.name
+  C(p.cust)?.name || 'Customer removed'
 }
 </td><td class="r">${
   Rs(p.amount)
@@ -591,7 +591,8 @@ const H = {
       id: uid(),
       cust: d.cust,
       amount: +d.amount,
-      method: d.method,
+      method: d.method || 'Cash',
+      invoice: d.invoice || '',
       date: d.date,
       notes: d.notes || ''
     });
@@ -645,7 +646,7 @@ const FORMS = {},
     purch: 'Add purchase',
     sale: 'Add sale',
     cust: 'Add customer',
-    cpay: 'Receive payment',
+    cpay: 'Add payment',
     spay: 'Pay supplier',
     sup: 'Add supplier',
     exp: 'Add expense',
@@ -696,6 +697,26 @@ render = function() {
   }
 };
 const _p = prof;
+function filterProfileHistory(input) {
+  const box = input.closest('.profile-history'), query = input.value.trim().toLowerCase();
+  const rows = [...box.querySelectorAll('tr[data-profile-history]')];
+  const matches = rows.filter(row => row.textContent.toLowerCase().includes(query));
+  const limit = +box.dataset.limit || 7;
+  rows.forEach(row => { row.style.display = matches.includes(row) && matches.indexOf(row) < limit ? '' : 'none' });
+  const toggle = box.querySelector('.history-toggle');
+  if (toggle) {
+    toggle.style.display = matches.length <= 7 && limit <= 7 ? 'none' : '';
+    toggle.textContent = matches.length > limit ? 'Show more' : 'Show less';
+  }
+}
+function toggleProfileHistory(button) {
+  const box = button.closest('.profile-history'), query = box.querySelector('.ts').value.trim().toLowerCase();
+  const count = [...box.querySelectorAll('tr[data-profile-history]')].filter(row => row.textContent.toLowerCase().includes(query)).length;
+  const limit = +box.dataset.limit || 7;
+  box.dataset.limit = limit >= count ? '7' : String(limit + 7);
+  filterProfileHistory(box.querySelector('.ts'));
+}
+
 prof = function(id) {
   _p(id);
   const t = $('#modal .top'),
@@ -821,13 +842,11 @@ function mig() {
   save()
 }
 const alloc = c => {
-  let pool = Math.max(0, sum(S.cpay.filter(x => x.cust == c.id), 'amount') - c.open),
-    o = {};
-  S.sales.filter(s => s.cust == c.id && s.pay == 'Credit').sort((a, b) => a.date.localeCompare(b.date) || (a.no || '').localeCompare(b.no || '')).forEach(s => {
-    const p = Math.min(s.qty * s.rate, pool);
-    o[s.id] = p;
-    pool -= p
-  });
+  const payments = S.cpay.filter(x => x.cust == c.id), invoices = S.sales.filter(s => s.cust == c.id && s.pay == 'Credit').sort((a, b) => a.date.localeCompare(b.date) || (a.no || '').localeCompare(b.no || ''));
+  const o = {};
+  invoices.forEach(s => { o[s.id] = Math.min(s.qty * s.rate, sum(payments.filter(p => p.invoice == s.id), 'amount')) });
+  let pool = Math.max(0, sum(payments.filter(p => !p.invoice), 'amount') - c.open);
+  invoices.forEach(s => { const due = s.qty * s.rate - o[s.id], extra = Math.min(due, pool); o[s.id] += extra; pool -= extra });
   return o
 };
 const invTbl = l => {
@@ -849,7 +868,7 @@ function openInv(id, ed) {
     t = s.qty * s.rate,
     p = alloc(c)[id] || 0,
     r = t - p;
-  $('#modal').innerHTML = `<div class="modal" onclick="if(event.target==this)this.remove()"><div class="card"><div class="top no"><h2>${ed?'Edit invoice '+s.no:'Invoice'}</h2><div class="acts">${ed?'':`<button class="btn ac" onclick="openInv('${id}',1)">Edit</button><button class="btn" onclick="document.body.className='pi';print()">Print</button>`}<button class="btn ghost" onclick="prof('${c.id}')">👤 Profile</button><button class="btn ghost" onclick="$('#modal').innerHTML=''">Close</button></div></div>` + (ed ? `<form data-f="invedit"><input type="hidden" name="id" value="${id}">${fld('Date',inp('date','date',s.date,'required'))}${fld('Fuel',`<select name="fuel">${
+  $('#modal').innerHTML = `<div class="modal" onclick="if(event.target==this)this.remove()"><div class="card"><div class="top no"><h2>${ed?'Edit invoice '+s.no:'Invoice'}</h2><div class="acts">${ed?'':`<button class="btn ac" onclick="settleCustomer('${c.id}','${id}')">Add payment</button><button class="btn" onclick="printInvoice('${id}')">Print</button>`}<button class="btn ghost" onclick="$('#modal').innerHTML=''">Close</button></div></div>` + (ed ? `<form data-f="invedit"><input type="hidden" name="id" value="${id}">${fld('Date',inp('date','date',s.date,'required'))}${fld('Fuel',`<select name="fuel">${
     opts(S.fuels,
     s.fuel)
   }
@@ -894,15 +913,25 @@ function printAsk() {
   $('#modal').innerHTML = `<div class="modal" onclick="if(event.target==this)this.remove()"><div class="card"><h2>Print report</h2><p class="sub">Which report do you want to print?</p><div class="acts"><button class="btn ac" onclick="printRep('d')">Daily report (${rd})</button><button class="btn" onclick="printRep('m')">Monthly report (${rm})</button><button class="btn ghost" onclick="$('#modal').innerHTML=''">Cancel</button></div></div></div>`
 }
 
-function printRep(k) {
-  $('#modal').innerHTML = '';
-  document.querySelectorAll('.ph').forEach(e => e.textContent = '');
-  $('#r' + k).querySelector('.ph').textContent = '— ' + (k == 'd' ? rd : rm);
-  document.body.className = 'pr rp-' + k;
+function printReport(k, source) {
+  const original = source || (k == 'd' ? $('#rd') : ($('#modal .rs') || $('#rm')));
+  if (!original) return;
+  const report = original.cloneNode(true);
+  report.querySelectorAll('.no,button,select').forEach(el => el.remove());
+  report.querySelectorAll('p').forEach(el => { if (el.querySelector('input')) el.remove() });
+  const stamp = report.querySelector('.ph');
+  if (stamp) stamp.textContent = '— ' + (k == 'd' ? rd : rm);
+  $('#pa').innerHTML = `<article class="report-print">${report.innerHTML}</article>`;
+  document.body.classList.remove('pr', 'rp-d', 'rp-m');
+  document.body.classList.add('pi');
   print()
 }
+function printRep(k) {
+  printReport(k)
+}
 onafterprint = () => {
-  document.body.className = ''
+  document.body.classList.remove('pi', 'pr', 'rp-d', 'rp-m');
+  $('#pa').innerHTML = ''
 };
 document.body.insertAdjacentHTML('beforeend', '<div id="dlg"></div>');
 const dlg = x => {
@@ -989,18 +1018,13 @@ function monthRep() {
   const t = document.createElement('div');
   t.innerHTML = V.rep();
   const m = t.querySelector('#rm').innerHTML.replace('onchange="rm=this.value;render()"', 'onchange="rm=this.value;monthRep()"').replace('<p><input type="month"', '<p class="no"><input type="month"');
-  $('#modal').innerHTML = `<div class="modal" onclick="if(event.target==this)this.remove()"><div class="card" style="max-width:920px"><div class="top no"><h2>Monthly report</h2><div class="acts"><button class="btn ac" onclick="askPrint(1)">🖨 Print</button><button class="btn ghost" onclick="$('#modal').innerHTML=''">Close</button></div></div>${m}<br>${t.lastElementChild.outerHTML}</div></div>`;
+  $('#modal').innerHTML = `<div class="modal" onclick="if(event.target==this)this.remove()"><div class="card" style="max-width:920px"><div class="top no"><h2>Monthly report</h2><div class="acts"><button class="btn ac" onclick="askPrint(1)">🖨 Print</button><button class="btn ghost" onclick="$('#modal').innerHTML=''">Close</button></div></div><div class="rs">${m}</div><br>${t.lastElementChild.outerHTML}</div></div>`;
   lab($('#modal'))
 }
 
 function askPrint(k) {
   ask(k ? `Print the monthly report for ${rm}?` : `Print the daily report for ${rd}?`,
-    () => {
-      const s = document.querySelector(k ? '#modal .ph' : '#rd .ph');
-      if (s) s.textContent = '— ' + (k ? rm : rd);
-      document.body.className = k ? 'pi' : 'pr rp-d';
-      print()
-    }, 'Print')
+    () => printReport(k ? 'm' : 'd', k ? $('#modal .rs') : $('#rd')), 'Print')
 }
 const ftag = id => {
   const c = id == 'f2' ? '#2467b5' : '#1f8a5b';
@@ -1100,8 +1124,15 @@ H.credit = gen(H.credit,
 H.sale = gen(H.sale, d => d.pay == 'Credit');
 const _cp = H.cpay;
 H.cpay = d => {
+  const c = C(d.cust), inv = d.invoice ? S.sales.find(x => x.id == d.invoice) : null;
+  const remaining = inv ? inv.qty * inv.rate - (alloc(c)[inv.id] || 0) : cbal(c);
+  if (!(+d.amount > 0) || +d.amount > remaining) {
+    alert(`Enter a payment greater than zero and no more than the remaining balance (${Rs(Math.max(0, remaining))}).`);
+    return;
+  }
   const m = _cp(d);
-  if (d.prof) setTimeout(() => prof(d.cust), 0);
+  if (d.invoice) setTimeout(() => openInv(d.invoice), 0);
+  else if (d.prof) setTimeout(() => prof(d.cust), 0);
   return m
 };
 H.custedit = d => {
@@ -1140,7 +1171,7 @@ function delCust(id) {
           s.pay = 'Cash'
         }
       });
-      S.cpay = S.cpay.filter(x => x.cust != id);
+      S.cpay.forEach(payment => { if (payment.cust == id) payment.cust = ''; });
       S.customers = S.customers.filter(x => x.id != id);
       commit('Profile deleted')
     })
@@ -1165,7 +1196,7 @@ prof = function(id) {
     st: 'Received'
   }))].reverse().sort((a, b) => b.d.localeCompare(a.d));
   $('#modal').innerHTML = `<div class="modal" onclick="if(event.target==this)this.remove()"><div class="card pf"><div class="phd"><div class="av">${c.name[0].toUpperCase()}</div><div><h2>${c.name}</h2><div>📞 ${c.phone||'—'} &nbsp;·&nbsp; 📍 ${c.address||'—'}</div></div><button class="btn ghost cl" onclick="$('#modal').innerHTML=''">Close</button></div>
-<div class="acts" style="margin-bottom:14px"><button class="btn ac" onclick="openForm('credit','${id}')">+ Give credit</button><button class="btn" onclick="editCust('${id}')">✎ Edit profile</button><button class="btn ghost" style="color:var(--rd);border-color:var(--rd)" onclick="delCust('${id}')">🗑 Delete profile</button></div>
+<div class="acts profile-actions"><button class="btn ac" onclick="openForm('credit','${id}')">+ Give credit</button><button class="btn" onclick="settleCustomer('${id}')">Add payment</button></div>
 <div class="sgrid">${stat('a','Credit taken',Rs(cr))}${stat('b','Paid',Rs(pd))}${stat('d','Outstanding',Rs(bal))}${stat('c','Credit limit',lim?Rs(lim):'None')}</div>
 ${lim?`<div class="sub">Used ${
     Math.round(u)
@@ -1175,8 +1206,7 @@ ${lim?`<div class="sub">Used ${
     lim-bal))
   }
   </div><div class="bar ${u>=90?'low':''}"><i style="width:${u}%"></i></div>`:''}
-<h3>Receive payment</h3><form data-f="cpay"><input type="hidden" name="cust" value="${id}"><input type="hidden" name="prof" value="1">${fld('Amount received',inp('amount','number','','required min=1'))}${fld('Method',`<select name="method"><option>Cash</option><option>Bank</option><option>Easypaisa/JazzCash</option></select>`)}${fld('Date',inp('date','date',td))}<button class="btn ac">Receive payment</button></form>
-<h3>Credit invoices</h3>${invTbl(S.sales.filter(x=>x.cust==id&&x.pay=='Credit'))}<h3>History</h3>${tbl(['Date','Details','>Amount','Status'],tx.map(t=>`<tr><td>${
+<section class="profile-history" data-limit="7"><div class="history-heading"><div><h3>History</h3><p>Customer credit and payment activity</p></div><span class="history-count">${tx.length} ${tx.length==1?'record':'records'}</span></div><div class="history-search"><input class="ts" placeholder="🔍 Search this table…" oninput="filterProfileHistory(this)"></div>${tbl(['Date','Details','>Amount','Status'],tx.map(t=>`<tr data-profile-history="1"><td>${
     t.d
   }
   </td><td>${
@@ -1188,8 +1218,9 @@ ${lim?`<div class="sub">Used ${
   </td><td><span class="tag ${t.a<0||t.st=='Cash'?'g':'o'}">${
     t.st
   }
-  </span></td></tr>`),'No transactions yet.')}</div></div>`;
-  lab($('#modal'))
+  </span></td></tr>`),'No transactions yet.')}${tx.length>7?'<div class="acts" style="justify-content:center;margin-top:12px"><button type="button" class="btn ghost history-toggle" onclick="toggleProfileHistory(this)">Show more</button></div>':''}</section><div class="acts profile-footer-actions"><button class="btn" onclick="editCust('${id}')">✎ Edit profile</button><button class="btn ghost" style="color:var(--rd);border-color:var(--rd)" onclick="delCust('${id}')">🗑 Delete profile</button></div></div></div>`;
+  lab($('#modal'));
+  filterProfileHistory($('#modal .profile-history .ts'))
 };
 const M5 = [
   ['dash', 'Dashboard'],
@@ -1329,6 +1360,13 @@ H.sup = d => {
 };
 const _sp = H.spay;
 H.spay = d => {
+  if (d.sprof) {
+    const remaining = Math.max(0, sbal(Su(d.supplier)));
+    if (!(+d.amount > 0) || +d.amount > remaining) {
+      alert(`Enter a payment greater than zero and no more than the payable balance (${Rs(remaining)}).`);
+      return;
+    }
+  }
   const m = _sp(d);
   if (d.sprof) setTimeout(() => sprof(d.supplier), 0);
   return m
@@ -1375,37 +1413,18 @@ function sprof(id) {
   if (!s) return;
   const t = sT(s),
     p = sP(s);
-  $('#modal').innerHTML = `<div class="modal" onclick="if(event.target==this)this.remove()"><div class="card pf"><div class="phd"><div class="av">${s.name[0].toUpperCase()}</div><div><h2>${s.name}</h2><div>📞 ${s.phone||'—'} &nbsp;·&nbsp; 📍 ${s.address||'—'}</div></div><button class="btn ghost cl" onclick="$('#modal').innerHTML=''">Close</button></div>
-<div class="acts" style="margin-bottom:14px"><button class="btn" onclick="editSup('${id}')">✎ Edit profile</button><button class="btn ghost" style="color:var(--rd);border-color:var(--rd)" onclick="delSup('${id}')">🗑 Delete profile</button></div>
+  const history = [...S.purchases.filter(x => x.supplier == id).map(x => ({
+    date: x.date, activity: 'Purchase', detail: `${F(x.fuel).name} · ${fmt(x.qty)} L @ ${Rs(x.rate)}${x.inv ? ' · ' + x.inv : ''}`, amount: x.qty * x.rate, incoming: false
+  })), ...S.spay.filter(x => x.supplier == id).map(x => ({
+    date: x.date, activity: 'Payment made', detail: `Paid by ${x.method || '—'}`, amount: x.amount, incoming: true
+  }))].sort((a,b) => (b.date || '').localeCompare(a.date || ''));
+  $('#modal').innerHTML = `<div class="modal" onclick="if(event.target==this)this.remove()"><div class="card pf"><div class="phd"><div class="av">${s.name[0].toUpperCase()}</div><div><h2>${s.name}</h2><div class="sub">📞 ${s.phone||'—'} &nbsp;·&nbsp; 📍 ${s.address||'—'}</div></div><button class="btn ghost cl" onclick="$('#modal').innerHTML=''">Close</button></div>
 <div class="sgrid">${stat('a','Total purchases',Rs(t))}${stat('b','Paid',Rs(p))}${stat('d','Payable',Rs(t-p))}</div>
-<h3>Pay supplier</h3><form data-f="spay"><input type="hidden" name="supplier" value="${id}"><input type="hidden" name="sprof" value="1">${fld('Amount (Rs)',inp('amount','number','','required min=1'))}${fld('Method',`<select name="method"><option>Bank</option><option>Cash</option></select>`)}${fld('Date',inp('date','date',td))}<button class="btn ac">Save payment</button></form>
-<h3>Purchases</h3>${tbl(['Date','Invoice','Category','>Litres','>Total'],newest(S.purchases.filter(x=>x.supplier==id)).map(x=>`<tr><td>${
-    x.date
-  }
-  </td><td>${
-    x.inv||''
-  }
-  </td><td>${
-    ftag(x.fuel)
-  }
-  </td><td class="r">${
-    fmt(x.qty)
-  }
-   L</td><td class="r">${
-    Rs(x.qty*x.rate)
-  }
-  </td></tr>`),'No purchases yet.')}
-<h3>Payments made</h3>${tbl(['Date','Method','>Amount'],newest(S.spay.filter(x=>x.supplier==id)).map(x=>`<tr><td>${
-    x.date
-  }
-  </td><td>${
-    x.method
-  }
-  </td><td class="r">${
-    Rs(x.amount)
-  }
-  </td></tr>`),'No payments yet.')}</div></div>`;
-  lab($('#modal'))
+<div class="acts profile-actions"><button class="btn ac" onclick="supplierSettlement('${id}')">Pay supplier</button></div>
+<section class="profile-history" data-limit="7"><div class="history-heading"><div><h3>History</h3><p>Purchases and payments to this supplier</p></div><span class="history-count">${history.length} ${history.length==1?'record':'records'}</span></div><div class="history-search"><input class="ts" placeholder="🔍 Search this table…" oninput="filterProfileHistory(this)"></div>${tbl(['Date','Activity','Details','>Amount','Status'],history.map(x=>`<tr data-profile-history="1"><td>${x.date}</td><td><span class="tag ${x.incoming?'g':'y'}">${x.activity}</span></td><td>${x.detail}</td><td class="r">${Rs(x.amount)}</td><td><span class="tag ${x.incoming?'g':'o'}">${x.incoming?'Paid':'Purchase'}</span></td></tr>`),'No supplier activity yet.')}${history.length>7?'<div class="acts" style="justify-content:center;margin-top:12px"><button type="button" class="btn ghost history-toggle" onclick="toggleProfileHistory(this)">Show more</button></div>':''}</section>
+<div class="acts profile-footer-actions"><button class="btn" onclick="editSup('${id}')">✎ Edit profile</button><button class="btn ghost" style="color:var(--rd);border-color:var(--rd)" onclick="delSup('${id}')">🗑 Delete profile</button></div></div></div>`;
+  lab($('#modal'));
+  filterProfileHistory($('#modal .profile-history .ts'))
 }
 const _of = openForm;
 openForm = function(k, pre) {
@@ -1502,8 +1521,76 @@ V.dash = () => {
 };
 
 function rcpt(t, no, date, who, head, rows, total, pb) {
-  $('#modal').innerHTML = `<div class="modal" onclick="if(event.target==this)this.remove()"><div class="card"><div class="top no"><h2>${t}</h2><div class="acts">${pb?`<button class="btn ac" onclick="${pb}">👤 Profile</button>`:''}<button class="btn" onclick="document.body.className='pi';print()">Print</button><button class="btn ghost" onclick="$('#modal').innerHTML=''">Close</button></div></div><div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px"><div><h2>Petrol Station</h2><div class="sub">${t}</div></div><div style="text-align:right"><b>${no||''}</b><div class="sub">Date: ${date}</div></div></div><hr style="border:0;border-top:1px solid var(--ln)"><p><b>${who[0]}:</b> ${who[1]}</p>${tbl(head,rows)}<br><div class="sgrid">${stat('a','Total',Rs(total))}</div></div></div>`;
+  $('#modal').innerHTML = `<div class="modal" onclick="if(event.target==this)this.remove()"><div class="card"><div class="top no"><h2>${t}</h2><div class="acts">${pb?`<button class="btn ac" onclick="${pb}">👤 Profile</button>`:''}<button class="btn" onclick="printReceipt()">Print</button><button class="btn ghost" onclick="$('#modal').innerHTML=''">Close</button></div></div><div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px"><div><h2>Petrol Station</h2><div class="sub">${t}</div></div><div style="text-align:right"><b>${no||''}</b><div class="sub">Date: ${date}</div></div></div><hr style="border:0;border-top:1px solid var(--ln)"><p><b>${who[0]}:</b> ${who[1]}</p>${tbl(head,rows)}<br><div class="sgrid">${stat('a','Total',Rs(total))}</div></div></div>`;
   lab($('#modal'))
+}
+
+function settleCustomer(customerId, invoiceId = '') {
+  const c = C(customerId), inv = invoiceId ? S.sales.find(x => x.id == invoiceId) : null;
+  if (!c) return;
+  const credit = inv ? inv.qty * inv.rate : sum(S.sales.filter(x => x.cust == c.id && x.pay == 'Credit'), x => x.qty * x.rate) + c.open;
+  const paid = inv ? (alloc(c)[inv.id] || 0) : sum(S.cpay.filter(x => x.cust == c.id), 'amount');
+  const remaining = Math.max(0, credit - paid);
+  $('#modal').innerHTML = `<div class="modal" onclick="if(event.target==this)this.remove()"><div class="card" style="max-width:620px"><div class="top"><div><h2>Add payment</h2><div class="sub">${c.name}${inv ? ' · Invoice ' + (inv.no || '') : ''}</div></div><button type="button" class="btn ghost" onclick="$('#modal').innerHTML=''">Close</button></div><div class="sgrid">${stat('a','Total credit',Rs(credit))}${stat('b','Paid so far',Rs(paid))}${stat('d','Remaining',Rs(remaining))}</div><form data-f="cpay" oninput="updateSettlement(this)"><input type="hidden" name="cust" value="${c.id}"><input type="hidden" name="prof" value="1"><input type="hidden" name="invoice" value="${inv?.id || ''}"><input type="hidden" name="method" value="Cash">${fld('Payment amount (Rs)',`<input name="amount" type="number" value="" min="0.01" max="${remaining}" step="any" required oninput="updateSettlement(this.form)">`)}${fld('Payment date',inp('date','date',td,'required'))}<div class="settlement-remaining" style="align-self:center"><span class="sub">Remaining after payment</span><b class="tot" id="settlementDue">${Rs(remaining)}</b></div><div class="acts" style="grid-column:1/-1;justify-content:flex-end"><button type="button" class="btn ghost" onclick="printSettlement('${c.id}','${inv?.id || ''}')">Print settlement</button><button class="btn ac">Add payment</button></div></form></div></div>`;
+}
+function updateSettlement(form) {
+  const amount = Math.max(0, +form.elements.amount.value || 0), max = +form.elements.amount.max || 0;
+  $('#settlementDue').textContent = Rs(Math.max(0, max - amount));
+}
+function printSettlement(customerId, invoiceId = '') {
+  const c = C(customerId), inv = invoiceId ? S.sales.find(x => x.id == invoiceId) : null;
+  const form = $('#modal form[data-f="cpay"]'), amount = Math.max(0, +form?.elements.amount.value || 0), paymentDate = form?.elements.date.value || td;
+  const previous = inv ? (alloc(c)[inv.id] || 0) : sum(S.cpay.filter(x => x.cust == c.id), 'amount');
+  const total = inv ? inv.qty * inv.rate : sum(S.sales.filter(x => x.cust == c.id && x.pay == 'Credit'), x => x.qty * x.rate) + c.open;
+  const remaining = Math.max(0, total - previous - amount);
+  $('#pa').innerHTML = `<article class="invoice-print"><header class="invoice-head"><div class="invoice-mark">⛽</div><div><h1>Petrol Station</h1><p>Customer payment settlement</p></div><div class="invoice-meta"><strong>PAYMENT RECEIPT</strong><span>${paymentDate}</span></div></header><section class="invoice-parties"><div><small>RECEIVED FROM</small><h2>${c.name}</h2><p>${c.phone || ''}</p></div>${inv ? `<div class="invoice-status"><small>INVOICE</small><b>${inv.no || '—'}</b></div>` : ''}</section><section class="invoice-totals" style="width:100%"><div><span>Total credit</span><b>${Rs(total)}</b></div><div><span>Previously paid</span><b>${Rs(previous)}</b></div><div><span>Payment received</span><b>${Rs(amount)}</b></div><div class="invoice-due"><span>Remaining balance</span><b>${Rs(remaining)}</b></div></section><footer class="invoice-foot"><b>Thank you. Payment recorded by Petrol Station.</b></footer></article>`;
+  document.body.classList.add('pi');
+  print();
+}
+
+function supplierSettlement(supplierId) {
+  const s = Su(supplierId);
+  if (!s) return;
+  const purchases = sT(s), paid = sP(s), payable = Math.max(0, purchases - paid);
+  const lines = newest(S.purchases.filter(x => x.supplier == s.id));
+  $('#modal').innerHTML = `<div class="modal" onclick="if(event.target==this)this.remove()"><div class="card" style="max-width:760px"><div class="top"><div><h2>Supplier settlement</h2><div class="sub">${s.name}</div></div><button type="button" class="btn ghost" onclick="$('#modal').innerHTML=''">Close</button></div><div class="sgrid">${stat('a','Total purchases',Rs(purchases))}${stat('b','Paid to date',Rs(paid))}${stat('d','Remaining payable',Rs(payable))}</div><h3>Purchase summary</h3>${tbl(['Date','Invoice','Fuel','>Litres','>Amount'],lines.map(x=>`<tr><td>${x.date}</td><td>${x.inv||'—'}</td><td>${F(x.fuel).name}</td><td class="r">${fmt(x.qty)} L</td><td class="r">${Rs(x.qty*x.rate)}</td></tr>`),'No purchases recorded.')}
+<form data-f="spay" oninput="updateSupplierSettlement(this)"><input type="hidden" name="supplier" value="${s.id}"><input type="hidden" name="sprof" value="1">${fld('Payment amount (Rs)',`<input name="amount" type="number" min="0.01" max="${payable}" step="any" required oninput="updateSupplierSettlement(this.form)">`)}${fld('Payment method',`<select name="method"><option>Bank</option><option>Cash</option></select>`)}${fld('Payment date',inp('date','date',td,'required'))}<div style="align-self:center"><span class="sub">Payable after payment</span><b class="tot" id="supplierDue">${Rs(payable)}</b></div><div class="acts" style="grid-column:1/-1;justify-content:flex-end"><button type="button" class="btn ghost" onclick="printSupplierSettlement('${s.id}')">Print settlement</button><button class="btn ac">Pay supplier</button></div></form></div></div>`;
+}
+function updateSupplierSettlement(form) {
+  const amount = Math.max(0, +form.elements.amount.value || 0), max = +form.elements.amount.max || 0;
+  $('#supplierDue').textContent = Rs(Math.max(0, max - amount));
+}
+function printSupplierSettlement(supplierId) {
+  const s = Su(supplierId), form = $('#modal form[data-f="spay"]');
+  if (!s || !form) return;
+  const amount = Math.max(0, +form.elements.amount.value || 0), purchases = sT(s), paid = sP(s);
+  const payable = Math.max(0, purchases - paid), remaining = Math.max(0, payable - amount);
+  const lines = newest(S.purchases.filter(x => x.supplier == s.id));
+  $('#pa').innerHTML = `<article class="invoice-print"><header class="invoice-head"><div class="invoice-mark">⛽</div><div><h1>Petrol Station</h1><p>Supplier account settlement</p></div><div class="invoice-meta"><strong>SETTLEMENT</strong><span>${form.elements.date.value || td}</span></div></header><section class="invoice-parties"><div><small>SUPPLIER</small><h2>${s.name}</h2><p>${s.phone || ''}</p><p>${s.address || ''}</p></div><div class="invoice-status"><small>PAYMENT METHOD</small><b>${form.elements.method.value}</b></div></section><table class="invoice-table"><thead><tr><th>PURCHASE DATE</th><th>INVOICE</th><th>FUEL</th><th>QUANTITY</th><th>AMOUNT</th></tr></thead><tbody>${lines.map(x=>`<tr><td>${x.date}</td><td>${x.inv||'—'}</td><td>${F(x.fuel).name}</td><td>${fmt(x.qty)} L</td><td>${Rs(x.qty*x.rate)}</td></tr>`).join('')}</tbody></table><section class="invoice-totals"><div><span>Total purchases</span><b>${Rs(purchases)}</b></div><div><span>Previously paid</span><b>${Rs(paid)}</b></div><div><span>Payment now</span><b>${Rs(amount)}</b></div><div class="invoice-due"><span>Remaining payable</span><b>${Rs(remaining)}</b></div></section><footer class="invoice-foot"><b>Supplier settlement statement</b><span>Generated by Petrol Station Manager.</span></footer></article>`;
+  document.body.classList.add('pi');
+  print();
+}
+
+function printReceipt() {
+  const card = $('#modal .card').cloneNode(true);
+  card.querySelector('.top.no')?.remove();
+  $('#pa').innerHTML = `<article class="invoice-print">${card.innerHTML}</article>`;
+  document.body.classList.add('pi');
+  print();
+}
+
+function printInvoice(id) {
+  const s = S.sales.find(x => x.id == id), c = C(s.cust), total = s.qty * s.rate;
+  const paid = alloc(c)[id] || 0, due = total - paid;
+  $('#pa').innerHTML = `<article class="invoice-print">
+    <header class="invoice-head"><div class="invoice-mark">⛽</div><div><h1>Petrol Station</h1><p>Fuel sales &amp; customer credit</p></div><div class="invoice-meta"><strong>INVOICE</strong><b>${s.no || '—'}</b><span>${s.date}</span></div></header>
+    <section class="invoice-parties"><div><small>BILLED TO</small><h2>${c?.name || 'Walk-in customer'}</h2><p>${c?.phone || ''}</p><p>${c?.address || ''}</p></div><div class="invoice-status"><small>PAYMENT STATUS</small><b>${due <= 0 ? 'PAID' : paid > 0 ? 'PARTIALLY PAID' : 'UNPAID'}</b></div></section>
+    <table class="invoice-table"><thead><tr><th>DESCRIPTION</th><th>QUANTITY</th><th>RATE</th><th>AMOUNT</th></tr></thead><tbody><tr><td>${F(s.fuel).name}${s.note ? `<small>${s.note}</small>` : ''}</td><td>${fmt(s.qty)} L</td><td>${Rs(s.rate)} / L</td><td>${Rs(total)}</td></tr></tbody></table>
+    <section class="invoice-totals"><div><span>Invoice total</span><b>${Rs(total)}</b></div><div><span>Paid</span><b>${Rs(paid)}</b></div><div class="invoice-due"><span>Balance due</span><b>${Rs(due)}</b></div></section>
+    <footer class="invoice-foot"><b>Thank you for your business.</b><span>Please retain this invoice for your records.</span></footer>
+  </article>`;
+  document.body.classList.add('pi');
+  print();
 }
 
 function openTx(k, id) {
